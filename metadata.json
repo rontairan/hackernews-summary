@@ -1,0 +1,5 @@
+{
+  "name": "AI Hacker News Reader",
+  "description": "An application that fetches top stories from Hacker News, translates and summarizes them using Gemini, and allows users to get AI-powered explanations for selected text.",
+  "requestFramePermissions": []
+}
