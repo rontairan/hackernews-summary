@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { HNStory, HNComment } from '../types';
-import { summarizeAndTranslateUrl, explainText, summarizeComments } from '../services/geminiService';
+import { translateArticle, explainText, summarizeComments } from '../services/geminiService';
 import Spinner from './Spinner';
 import ErrorDisplay from './ErrorDisplay';
 
@@ -30,9 +30,11 @@ const CloseIcon = () => (
 );
 
 const NewsDetail: React.FC<NewsDetailProps> = ({ article, onBack }) => {
-  const [summary, setSummary] = useState<string>('');
-  const [isSummarizing, setIsSummarizing] = useState<boolean>(false);
-  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [translatedContent, setTranslatedContent] = useState<string>('');
+  const [originalContent, setOriginalContent] = useState<string>('');
+  const [isTranslating, setIsTranslating] = useState<boolean>(false);
+  const [translationError, setTranslationError] = useState<string | null>(null);
+  const [displayLanguage, setDisplayLanguage] = useState<'ja' | 'en'>('ja');
 
   const [commentSummary, setCommentSummary] = useState<string>('');
   const [isSummarizingComments, setIsSummarizingComments] = useState<boolean>(false);
@@ -44,7 +46,7 @@ const NewsDetail: React.FC<NewsDetailProps> = ({ article, onBack }) => {
   const [isExplaining, setIsExplaining] = useState<boolean>(false);
   const [showExplanationModal, setShowExplanationModal] = useState<boolean>(false);
   
-  const summaryContentRef = useRef<HTMLDivElement>(null);
+  const articleContentRef = useRef<HTMLDivElement>(null);
 
   const fetchAndSummarizeComments = useCallback(async () => {
       if (!article.kids || article.kids.length === 0) {
@@ -84,57 +86,71 @@ const NewsDetail: React.FC<NewsDetailProps> = ({ article, onBack }) => {
   }, [article.kids]);
 
   useEffect(() => {
-    const summarizeArticle = async () => {
-      setIsSummarizing(true);
-      setSummaryError(null);
-      setSummary('');
+    const fetchAndTranslateArticle = async () => {
+      setIsTranslating(true);
+      setTranslationError(null);
+      setTranslatedContent('');
+      setOriginalContent('');
       try {
-        const result = await summarizeAndTranslateUrl(article.url);
-        setSummary(result);
+        const { originalText, translatedText } = await translateArticle(article.url);
+        setOriginalContent(originalText);
+        setTranslatedContent(translatedText);
       } catch (error) {
-        setSummaryError(error instanceof Error ? error.message : 'An unknown error occurred.');
+        setTranslationError(error instanceof Error ? error.message : 'An unknown error occurred.');
       } finally {
-        setIsSummarizing(false);
+        setIsTranslating(false);
       }
     };
 
-    summarizeArticle();
+    fetchAndTranslateArticle();
     fetchAndSummarizeComments();
   }, [article.url, article.id, fetchAndSummarizeComments]);
 
   const handleMouseUp = useCallback(() => {
-    const selection = window.getSelection();
-    const text = selection?.toString().trim() ?? '';
-
-    if (text.length > 10) {
-      const range = selection?.getRangeAt(0);
-      if (range && summaryContentRef.current?.contains(range.commonAncestorContainer)) {
-        const rect = range.getBoundingClientRect();
-        const containerRect = summaryContentRef.current?.getBoundingClientRect();
-        if(containerRect) {
-            setPopupPosition({
-                top: rect.top - containerRect.top + rect.height,
-                left: rect.left - containerRect.left + rect.width / 2,
-            });
-            setSelectedText(text);
+    setTimeout(() => {
+      const selection = window.getSelection();
+      
+      if (!selection || selection.isCollapsed) {
+        if (popupPosition) {
+            setPopupPosition(null);
+            setSelectedText('');
         }
+        return;
       }
-    } else {
-      setSelectedText('');
-      setPopupPosition(null);
-    }
-  }, []);
+      
+      const text = selection.toString().trim();
+
+      if (text.length > 10) {
+        const range = selection.getRangeAt(0);
+        if (articleContentRef.current?.contains(range.commonAncestorContainer)) {
+          const rect = range.getBoundingClientRect();
+          const containerRect = articleContentRef.current.getBoundingClientRect();
+          setPopupPosition({
+            top: rect.bottom - containerRect.top + 5,
+            left: rect.left - containerRect.left + rect.width / 2,
+          });
+          setSelectedText(text);
+        }
+      } else {
+        setPopupPosition(null);
+        setSelectedText('');
+      }
+    }, 0);
+  }, [popupPosition]);
 
   const handleExplainClick = async () => {
     if (!selectedText) return;
 
-    setPopupPosition(null);
+    const button = document.querySelector('.explain-popup-button');
+    if (button) button.remove();
+
     setShowExplanationModal(true);
     setIsExplaining(true);
     setExplanation('');
 
     try {
-      const result = await explainText(selectedText, summary);
+      const context = displayLanguage === 'ja' ? translatedContent : originalContent;
+      const result = await explainText(selectedText, context);
       setExplanation(result);
     } catch (error) {
       setExplanation('Sorry, I could not generate an explanation at this time.');
@@ -145,7 +161,8 @@ const NewsDetail: React.FC<NewsDetailProps> = ({ article, onBack }) => {
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
-            if (popupPosition && summaryContentRef.current && !summaryContentRef.current.contains(event.target as Node)) {
+            const target = event.target as Element;
+            if (popupPosition && articleContentRef.current && !articleContentRef.current.contains(target as Node) && !target.closest('.explain-popup-button')) {
                 setSelectedText('');
                 setPopupPosition(null);
             }
@@ -155,6 +172,27 @@ const NewsDetail: React.FC<NewsDetailProps> = ({ article, onBack }) => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
     }, [popupPosition]);
+
+    const LanguageToggle = () => (
+      <div className="flex items-center space-x-2 mb-4">
+          <span className={`text-sm font-medium ${displayLanguage === 'en' ? 'text-white' : 'text-gray-400'}`}>English</span>
+          <button
+              type="button"
+              onClick={() => setDisplayLanguage(lang => lang === 'ja' ? 'en' : 'ja')}
+              className={`${displayLanguage === 'ja' ? 'bg-orange-600' : 'bg-gray-600'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-gray-800`}
+              role="switch"
+              aria-checked={displayLanguage === 'ja'}
+          >
+              <span
+                  aria-hidden="true"
+                  className={`${displayLanguage === 'ja' ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+              />
+          </button>
+          <span className={`text-sm font-medium ${displayLanguage === 'ja' ? 'text-white' : 'text-gray-400'}`}>日本語</span>
+      </div>
+  );
+
+  const contentToDisplay = displayLanguage === 'ja' ? translatedContent : originalContent;
 
   return (
     <div className="bg-gray-800 rounded-lg p-6 sm:p-8 animate-fade-in">
@@ -176,28 +214,31 @@ const NewsDetail: React.FC<NewsDetailProps> = ({ article, onBack }) => {
       </div>
 
       <div className="mt-6 pt-6 border-t border-gray-700">
-        {isSummarizing && (
+        {isTranslating && (
              <div className="flex flex-col justify-center items-center h-40">
                 <Spinner size="h-12 w-12" />
-                <p className="mt-4 text-gray-400">Analyzing and translating the article...</p>
+                <p className="mt-4 text-gray-400">記事を翻訳中...</p>
             </div>
         )}
 
-        {summaryError && <ErrorDisplay message={summaryError} />}
+        {translationError && <ErrorDisplay message={translationError} />}
         
-        {summary && (
-            <div className="relative" ref={summaryContentRef}>
-                <h2 className="text-2xl font-bold text-gray-300 mb-4">AIによる要約</h2>
+        {contentToDisplay && (
+            <div className="relative" ref={articleContentRef}>
+                <div className="flex justify-between items-center">
+                  <h2 className="text-2xl font-bold text-gray-300 mb-4">AIによる記事翻訳</h2>
+                  <LanguageToggle />
+                </div>
                 <div 
                     className="prose-custom text-lg text-gray-300 leading-relaxed select-text"
                     onMouseUp={handleMouseUp}
-                    dangerouslySetInnerHTML={{ __html: window.marked ? window.marked.parse(summary) : summary }}
+                    dangerouslySetInnerHTML={{ __html: window.marked ? window.marked.parse(contentToDisplay) : contentToDisplay }}
                 />
 
                 {popupPosition && (
                 <button
                     onClick={handleExplainClick}
-                    className="absolute bg-gray-900 text-white px-4 py-2 rounded-lg shadow-lg flex items-center animate-fade-in-fast"
+                    className="absolute bg-gray-900 text-white px-4 py-2 rounded-lg shadow-lg flex items-center animate-fade-in-fast explain-popup-button"
                     style={{ top: `${popupPosition.top}px`, left: `${popupPosition.left}px`, transform: 'translateX(-50%)' }}
                 >
                     <ExplanationIcon/> Explain

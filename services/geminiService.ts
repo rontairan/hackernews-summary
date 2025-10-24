@@ -45,19 +45,31 @@ ${JSON.stringify(titles)}
   }
 };
 
-export const summarizeAndTranslateUrl = async (url: string): Promise<string> => {
+export const translateArticle = async (url: string): Promise<{ originalText: string; translatedText: string; }> => {
   try {
     const response: GenerateContentResponse = await ai.models.generateContent({
       model: "gemini-2.5-pro",
-      contents: `以下のURLの記事の内容を、日本の読者向けに詳細に要約し、日本語に翻訳してください。技術的な内容も正確に伝わるようにしてください。マークダウン形式で出力してください。
+      contents: `以下のURLの記事の本文を抽出し、日本語に翻訳してください。HTMLタグは削除し、マークダウン形式で構造を維持してください。結果はJSON形式で、"originalText"（原文）と "translatedText"（翻訳文）のキーを持つオブジェクトとして返してください。
 
 URL: ${url}
 `,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            originalText: { type: Type.STRING, description: "The original article content in Markdown format." },
+            translatedText: { type: Type.STRING, description: "The translated article content in Japanese, in Markdown format." }
+          },
+          required: ["originalText", "translatedText"]
+        }
+      }
     });
-    return cleanResponseText(response.text);
+    const jsonStr = response.text.trim();
+    return JSON.parse(jsonStr);
   } catch (error) {
-    console.error("Error summarizing and translating URL:", error);
-    throw new Error("Failed to summarize and translate the article.");
+    console.error("Error translating article:", error);
+    throw new Error("Failed to translate the article.");
   }
 };
 
